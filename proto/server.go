@@ -10,7 +10,7 @@ import (
 
 type ClientConnection struct {
 	clientID string
-	stream   ChatService_ConnectServer
+	stream   ChatService_SubscribeServer
 	active   bool
 	errChan  chan error
 }
@@ -50,13 +50,10 @@ func (r *Room) performCleanup() {
 				r.connections = append(r.connections[:i], r.connections[i:]...)
 			}
 		}
-		if len(r.connections) == 0 {
-			r.errChan <- errors.New("room empty")
-			break
-		}
 		time.Sleep(time.Second * 10)
 	}
 	r.wg.Done()
+
 }
 
 type Server struct {
@@ -65,21 +62,21 @@ type Server struct {
 
 func (s Server) ListRooms(ctx context.Context, empty *Empty) (*ListRoomResponse, error) {
 	lrr := &ListRoomResponse{
-		RoomIDs: []string{},
+		RoomNames: []string{},
 	}
 	for k := range s.roomsMap {
-		lrr.RoomIDs = append(lrr.RoomIDs, k)
+		lrr.RoomNames = append(lrr.RoomNames, k)
 	}
 	return lrr, nil
 }
 
 func (s Server) Subscribe(request *RoomRequest, server ChatService_SubscribeServer) error {
-	roomID := request.RoomID
+	roomID := request.RoomName
 	var room *Room
 	if _, exists := s.roomsMap[roomID]; !exists {
 		room = NewRoom()
 		room.connections = append(room.connections, &ClientConnection{
-			clientID: request.InitialConnectionRequest.ServerId,
+			clientID: request.GetInitialConnectionRequest().GetServerID(),
 			stream:   server,
 			active:   true,
 			errChan:  make(chan error),
@@ -89,22 +86,21 @@ func (s Server) Subscribe(request *RoomRequest, server ChatService_SubscribeServ
 	} else {
 		room = s.roomsMap[roomID]
 		for _, conn := range room.connections {
-			if conn.clientID == request.InitialConnectionRequest.ServerId {
+			if conn.clientID == request.GetInitialConnectionRequest().GetServerID() {
 				return errors.New("user with the same name is already in the room")
 			}
 		}
 		s.roomsMap[roomID].connections = append(s.roomsMap[roomID].connections, &ClientConnection{
-			clientID: request.InitialConnectionRequest.ServerId,
+			clientID: request.GetInitialConnectionRequest().GetServerID(),
 			stream:   server,
 			active:   true,
 			errChan:  make(chan error),
 		})
 		room.BroadcastMessage(&ChatMessage{
-			SenderID:       "GATEWAY",
-			RecipientID:    "",
-			Content:        []byte(fmt.Sprintf("%s joined.", request.InitialConnectionRequest.ServerId)),
-			Timestamp:      uint64(time.Now().Unix()),
-			SenderUsername: "GATEWAY",
+			Sender:    "GATEWAY",
+			Recipient: "",
+			Content:   []byte(fmt.Sprintf("%s joined.", request.GetInitialConnectionRequest().GetServerID())),
+			Timestamp: uint64(time.Now().Unix()),
 		})
 	}
 	return <-room.errChan
@@ -120,16 +116,8 @@ func (s Server) UnsubscribeAll(ctx context.Context, request *ConnectionRequest) 
 	return &Empty{}, nil
 }
 
-func (s Server) Disconnect(ctx context.Context, request *ConnectionRequest) (*Empty, error) {
-	panic("Deprecated")
-}
-
-func (s Server) Connect(request *ConnectionRequest, server ChatService_ConnectServer) error {
-	panic("Deprecated")
-}
-
 func (s Server) SendMessage(ctx context.Context, message *ChatMessage) (*Empty, error) {
-	forClient := message.GetRecipientID()
+	forClient := message.GetRecipient()
 	for k, room := range s.roomsMap {
 		if k == forClient {
 			room.BroadcastMessage(message)
@@ -146,9 +134,21 @@ var EMPTY_MESSAGE = ChatMessage{
 	Timestamp: 0,
 }
 
+func (s Server) performRoomCleanup() {
+	for {
+		for k, room := range s.roomsMap {
+			if len(room.connections) == 0 {
+				delete(s.roomsMap, k)
+			}
+		}
+		time.Sleep(time.Second * 20)
+	}
+}
+
 func NewChatServer() ChatServiceServer {
 	s := &Server{
 		roomsMap: map[string]*Room{},
 	}
+	go s.performRoomCleanup()
 	return s
 }

@@ -13,11 +13,15 @@ func main() {
 	if err := godotenv.Load(); err != nil {
 		log.Fatalln(err)
 	}
-	// server should keep the other clients alive and make them wait for nem messages for them
-	lis, _ := net.Listen("tcp", ":"+os.Getenv("PORT"))
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "9000"
+	}
+	lis, _ := net.Listen("tcp", ":"+port)
 
 	baseServer := grpc.NewServer()
 	srv := proto.NewChatServer()
 	proto.RegisterChatServiceServer(baseServer, srv)
+	log.Println("gRPC server listening on :" + port)
 	baseServer.Serve(lis)
 }
