@@ -46,6 +46,9 @@ func (r *Room) performCleanup() {
 	r.wg.Add(1)
 	for {
 		for i, connection := range r.connections {
+			if err := connection.stream.Send(&EMPTY_MESSAGE); err != nil {
+				connection.active = false
+			}
 			if !connection.active {
 				r.connections = append(r.connections[:i], r.connections[i:]...)
 			}
